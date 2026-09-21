@@ -58,5 +58,5 @@ docker build \
     "$STAGE"
 
 echo "==> 完成：${TAG}"
-echo "    接下来把 docker-compose.yml 中 core-billionmail 的 image 改成该 tag，"
-echo "    再执行：docker compose up -d core-billionmail"
+echo "    要把部署切到该镜像，请在部署目录执行 ./apply-core-patch.sh，"
+echo "    它会写好 docker-compose.override.yml 并重建 core 容器。"
