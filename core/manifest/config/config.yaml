@@ -51,7 +51,9 @@ server:
   dumpRouterMap: false # Whether to print all route lists when the Server starts. Default is true
 
   # Version
-  version: "4.9.0"
+  # 上游 4.9.1 / 4.9.3 只升了 docker-compose.yml 的镜像 tag，忘了同步这里，
+  # 导致官方镜像界面一直显示 4.9.0。这里对齐上游基线并标注自建补丁。
+  version: "4.9.3-safepath"
 
 viewer:
   Paths: ["template"]
