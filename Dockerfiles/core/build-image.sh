@@ -16,11 +16,26 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TAG="${1:-billionmail/core:local}"
 TARGETARCH="${TARGETARCH:-amd64}"
 
-echo "==> 编译 linux/${TARGETARCH} 二进制"
-(
-    cd "$REPO_ROOT/core"
-    GOOS=linux GOARCH="$TARGETARCH" CGO_ENABLED=0 go build -o "billionmail-${TARGETARCH}" .
-)
+# 与官方发行版一致的编译参数：strip 符号表并去掉构建路径
+GO_BUILD_FLAGS=(-trimpath -ldflags=-s\ -w -o "billionmail-${TARGETARCH}" .)
+
+if command -v go >/dev/null 2>&1; then
+    echo "==> 用本机 Go 编译 linux/${TARGETARCH} 二进制"
+    (
+        cd "$REPO_ROOT/core"
+        GOOS=linux GOARCH="$TARGETARCH" CGO_ENABLED=0 go build "${GO_BUILD_FLAGS[@]}"
+    )
+else
+    # 全新服务器通常没有 Go，用容器编译，免去装工具链。
+    # 模块缓存放在具名卷里，重复构建不必重新下载依赖。
+    echo "==> 本机无 Go，改用 golang 容器编译 linux/${TARGETARCH} 二进制"
+    docker run --rm \
+        -v "$REPO_ROOT/core:/src" -w /src \
+        -v billionmail-gomod-cache:/go/pkg/mod \
+        -e GOOS=linux -e GOARCH="$TARGETARCH" -e CGO_ENABLED=0 \
+        golang:1.24-alpine \
+        go build "${GO_BUILD_FLAGS[@]}"
+fi
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
