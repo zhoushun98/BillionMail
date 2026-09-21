@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -95,6 +97,143 @@ func TestTrimWebBasePathMatchesSafePathExemption(t *testing.T) {
 	if isSafePathExemptURI(trimWebBasePath("/billionmail/overview", basePath)) {
 		t.Error("带前缀的管理后台路径不应被豁免")
 	}
+}
+
+// withWebmailSock 让 webmailAvailable 在测试期间认为 PHP-FPM 已就绪。
+func withWebmailSock(t *testing.T, available bool) {
+	t.Helper()
+
+	original := webmailSockPath
+	t.Cleanup(func() { webmailSockPath = original })
+
+	if !available {
+		webmailSockPath = func() string { return filepath.Join(t.TempDir(), "absent.sock") }
+		return
+	}
+
+	p := filepath.Join(t.TempDir(), "php-fpm.sock")
+
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatalf("创建占位套接字失败: %v", err)
+	}
+
+	webmailSockPath = func() string { return p }
+}
+
+func TestIsConsoleEntryURI(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/", true},
+		{"/index.html", true},
+		// 形近路径不属于入口，照常走静态/兜底逻辑
+		{"/index.htm", false},
+		{"/index.html/", false},
+		{"/overview", false},
+		{"/roundcube/", false},
+		{"/static/index.html", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		if got := isConsoleEntryURI(tt.path); got != tt.want {
+			t.Errorf("isConsoleEntryURI(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestRootRedirectsToWebmail(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want bool
+	}{
+		{"未配置时默认开启", "", true},
+		{"0 关闭", "0", false},
+		{"false 关闭", "false", false},
+		{"off 关闭", "off", false},
+		{"no 关闭", "no", false},
+		{"大小写不敏感", "FALSE", false},
+		{"带空白仍能识别", "  off  ", false},
+		{"1 开启", "1", true},
+		{"true 开启", "true", true},
+		{"无法识别的值按开启处理", "yes-please", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(rootToWebmailEnvKey, tt.env)
+
+			if got := rootRedirectsToWebmail(); got != tt.want {
+				t.Errorf("rootRedirectsToWebmail() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestWebmailRedirectTarget 锁定改造后的核心行为：
+// 未通过 SafePath 的访客访问根路径要落到 Webmail，其余路径继续回 404，
+// 免得向未授权访客暴露控制台路由的存在。
+func TestWebmailRedirectTarget(t *testing.T) {
+	t.Run("根路径跳转到 Webmail", func(t *testing.T) {
+		t.Setenv(rootToWebmailEnvKey, "")
+		withWebmailSock(t, true)
+
+		if got := webmailRedirectTarget("/", ""); got != "/roundcube/" {
+			t.Errorf("webmailRedirectTarget(\"/\", \"\") = %q, want %q", got, "/roundcube/")
+		}
+	})
+
+	t.Run("反向代理前缀下保留前缀", func(t *testing.T) {
+		t.Setenv(rootToWebmailEnvKey, "")
+		withWebmailSock(t, true)
+
+		if got := webmailRedirectTarget("/", "/billionmail"); got != "/billionmail/roundcube/" {
+			t.Errorf("带前缀跳转目标 = %q, want %q", got, "/billionmail/roundcube/")
+		}
+	})
+
+	// /index.html 与 / 是同一个控制台入口，必须一并接管，
+	// 否则绕开根路径就能直接拿到后台 SPA 外壳。
+	t.Run("index.html 与根路径同等处理", func(t *testing.T) {
+		t.Setenv(rootToWebmailEnvKey, "")
+		withWebmailSock(t, true)
+
+		if got := webmailRedirectTarget("/index.html", ""); got != "/roundcube/" {
+			t.Errorf("webmailRedirectTarget(\"/index.html\") = %q, want %q", got, "/roundcube/")
+		}
+	})
+
+	t.Run("非控制台入口不跳转", func(t *testing.T) {
+		t.Setenv(rootToWebmailEnvKey, "")
+		withWebmailSock(t, true)
+
+		// 这些路径必须维持 404，否则等于告诉访客后台长什么样
+		for _, p := range []string{"/overview", "/api/overview/get", "/domains", "/index.htm", "/indexXhtml"} {
+			if got := webmailRedirectTarget(p, ""); got != "" {
+				t.Errorf("webmailRedirectTarget(%q) = %q, 期望不跳转", p, got)
+			}
+		}
+	})
+
+	t.Run("开关关闭时不跳转", func(t *testing.T) {
+		t.Setenv(rootToWebmailEnvKey, "0")
+		withWebmailSock(t, true)
+
+		if got := webmailRedirectTarget("/", ""); got != "" {
+			t.Errorf("开关关闭仍返回 %q，期望不跳转", got)
+		}
+	})
+
+	t.Run("Webmail 不可用时退回 404", func(t *testing.T) {
+		t.Setenv(rootToWebmailEnvKey, "")
+		withWebmailSock(t, false)
+
+		if got := webmailRedirectTarget("/", ""); got != "" {
+			t.Errorf("套接字缺失仍返回 %q，期望不跳转", got)
+		}
+	})
 }
 
 // TestPublicRoutesAreNotSwallowedByFallback 固定住路由层的前提：

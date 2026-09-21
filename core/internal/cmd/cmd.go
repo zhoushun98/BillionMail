@@ -248,6 +248,22 @@ var (
 							return
 						}
 
+						// 控制台入口必须先于静态文件放行处理：GoFrame 把 / 和 /index.html
+						// 直接映射到 public/dist/index.html，一旦走进下面的 IsFileRequest
+						// 就绕过了 SafePath。
+						if isConsoleEntryURI(reqPath) && !r.Session.MustGet("safe_path_pass", false).Bool() {
+							if target := webmailRedirectTarget(reqPath, webBasePath); target != "" {
+								// 根路径留给普通邮箱用户，管理后台只在 SafePath 背后
+								r.Response.Header().Set("Location", target)
+								r.Response.WriteHeader(http.StatusFound)
+							} else {
+								r.Response.WriteHeader(404)
+							}
+
+							r.ExitAll()
+							return
+						}
+
 						if r.IsFileRequest() {
 							return
 						}
