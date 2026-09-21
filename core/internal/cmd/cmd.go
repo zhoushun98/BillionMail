@@ -93,15 +93,7 @@ func webBaseRoot(basePath string) string {
 func stripWebBasePathMiddleware(basePath string) ghttp.HandlerFunc {
 	return func(r *ghttp.Request) {
 		if basePath != "" {
-			if r.URL.Path == basePath {
-				r.URL.Path = "/"
-			} else if strings.HasPrefix(r.URL.Path, basePath+"/") {
-				r.URL.Path = strings.TrimPrefix(r.URL.Path, basePath)
-				if r.URL.Path == "" {
-					r.URL.Path = "/"
-				}
-			}
-
+			r.URL.Path = trimWebBasePath(r.URL.Path, basePath)
 			r.URL.RawPath = ""
 		}
 
@@ -230,7 +222,10 @@ var (
 				ghttp.HookBeforeServe: func(r *ghttp.Request) {
 					// Safe path check
 					if safepath != "" {
-						if r.URL.Path == "/"+safepath {
+						// hook 早于 stripWebBasePathMiddleware 执行，先剥掉反向代理前缀再比较路径
+						reqPath := trimWebBasePath(r.URL.Path, webBasePath)
+
+						if reqPath == "/"+safepath {
 							// Set session
 							err := r.Session.Set("safe_path_pass", true)
 
@@ -244,7 +239,12 @@ var (
 						}
 
 						// check if the request is in the excluded URIs
-						if _, ok := excludesURIs[r.URL.Path]; ok {
+						if _, ok := excludesURIs[reqPath]; ok {
+							return
+						}
+
+						// Roundcube / ACME HTTP-01 / 跟踪链接属于公共路由，不能要求 safe_path_pass
+						if isSafePathExemptURI(reqPath) {
 							return
 						}
 
@@ -253,7 +253,7 @@ var (
 						}
 
 						if !r.Session.MustGet("safe_path_pass", false).Bool() {
-							if strings.HasPrefix(r.URL.Path, "/api/") {
+							if strings.HasPrefix(reqPath, "/api/") {
 								// Check if the request is an API token request
 								if claims, err := rbac2.JWT().ParseTokenByRequest(r); err == nil && claims != nil && claims.ApiToken {
 									return
