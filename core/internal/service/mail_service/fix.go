@@ -5,11 +5,50 @@ import (
 	docker "billionmail-core/internal/service/dockerapi"
 	"billionmail-core/internal/service/public"
 	"context"
-	"github.com/gogf/gf/v2/database/gdb"
 	"github.com/gogf/gf/v2/frame/g"
 	"path/filepath"
 	"strings"
 )
+
+// placeholderHostnames 是不能用作 Postfix myhostname 的占位值，
+// 命中这些值时视为“未配置”，需要重新推导。
+var placeholderHostnames = map[string]struct{}{
+	"":                      {},
+	"mail.example.com":      {},
+	"localhost":             {},
+	"localhost.localdomain": {},
+}
+
+// isPlaceholderHostname 判断一个 myhostname 取值是否只是占位符。
+func isPlaceholderHostname(v string) bool {
+	_, ok := placeholderHostnames[strings.TrimSpace(v)]
+
+	return ok
+}
+
+// resolvePostfixHostname 推导 Postfix 的 myhostname。
+//
+// 优先使用 .env 中运维显式配置的 BILLIONMAIL_HOSTNAME；没有可用值时才回退到第一个
+// 启用的域名，且必须经 public.FormatMX 转成邮件主机名（mail.example.com 形式）。
+//
+// 这里绝不能直接用裸域：裸域通常只配了 MX 而没有 A 记录，Postfix 拿它去 HELO 时
+// 对方反查不到地址，会按可疑来源扣分甚至拒收；而且 Postfix 会把 mydomain 推导成
+// 裸域去掉首段的结果（如 example.com -> com），同样是错的。
+func resolvePostfixHostname(ctx context.Context) string {
+	if v := strings.TrimSpace(public.MustGetDockerEnv("BILLIONMAIL_HOSTNAME", "")); !isPlaceholderHostname(v) && strings.Contains(v, ".") {
+		return v
+	}
+
+	val, err := g.DB().Model("domain").Where("active = 1").OrderAsc("create_time").Value("domain")
+
+	if err != nil || val.IsNil() || strings.TrimSpace(val.String()) == "" {
+		g.Log().Warning(ctx, "No active domain found for Postfix myhostname, falling back to localhost")
+
+		return "localhost"
+	}
+
+	return public.FormatMX(strings.TrimSpace(val.String()))
+}
 
 func FixPostfixMainConfig(ctx context.Context) {
 	g.Log().Debug(ctx, "Fix postfix main config")
@@ -98,9 +137,7 @@ endif
 				return true
 			}
 
-			v := strings.TrimSpace(seps[1])
-
-			if v == "" || v == "mail.example.com" || v == "localhost.localdomain" || v == "localhost" {
+			if isPlaceholderHostname(seps[1]) {
 				skipNextEmptyLine = true
 				return true
 			}
@@ -120,15 +157,7 @@ endif
 
 	// If myhostname is not found, add it at the end
 	if !containsHostname {
-		// get first added domain
-		var val gdb.Value
-		val, err = g.DB().Model("domain").Where("active = 1").OrderAsc("create_time").Value("domain")
-
-		d := "localhost"
-
-		if err == nil && !val.IsNil() {
-			d = val.String()
-		}
+		d := resolvePostfixHostname(ctx)
 
 		lineLength := len(lines)
 
