@@ -47,3 +47,6 @@ core/frontend/coverage/
 
 # Python
 __pycache__/
+
+# 各服务器本地生成的 core 镜像覆盖配置（由 apply-core-patch.sh 写入）
+docker-compose.override.yml
