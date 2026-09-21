@@ -1,3 +1,9 @@
+//go:build ignore
+
+// 开发用热重载启动器，通过 `go run run_dev.go` 单独执行。
+// 加 ignore 标签是为了不和 main.go 的 main() 冲突，否则 `go build .`
+// 与 `go vet ./...` 都会因 "main redeclared in this block" 失败。
+
 package main
 
 import (
