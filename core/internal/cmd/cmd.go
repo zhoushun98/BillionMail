@@ -185,6 +185,10 @@ var (
 			s := g.Server(consts.DEFAULT_SERVER_NAME)
 			webBasePath := configuredWebBasePath()
 
+			// hook 里要用它拼跳转地址，必须在绑定 hook 之前定好，
+			// 下面的 SetHTTPSPort 也复用同一个值，避免两处取值不一致。
+			httpsPort := resolvedHTTPSPort(ctx)
+
 			// Use Redis for session storage
 			// s.SetSessionStorage(gsession.NewStorageRedis(g.Redis()))
 
@@ -220,6 +224,13 @@ var (
 			// Bind Server Hooks
 			s.BindHookHandlerByMap("/*", map[ghttp.HookName]ghttp.HandlerFunc{
 				ghttp.HookBeforeServe: func(r *ghttp.Request) {
+					// 明文 HTTP 一律跳到 HTTPS，先于 SafePath 处理：
+					// 登录页、Webmail 都不能让密码以明文过网。
+					if enforceHTTPS(r, webBasePath, httpsPort) {
+						r.ExitAll()
+						return
+					}
+
 					// Safe path check
 					if safepath != "" {
 						// hook 早于 stripWebBasePathMiddleware 执行，先剥掉反向代理前缀再比较路径
@@ -525,10 +536,7 @@ var (
 			}
 
 			// Set HTTPS ports
-			s.SetHTTPSPort(g.Cfg().MustGet(ctx, "server.httpsPort", 443).Int())
-			if httpsPort, err := public.DockerEnv("HTTPS_PORT"); err == nil && httpsPort != "" {
-				s.SetHTTPSPort(gconv.Int(httpsPort))
-			}
+			s.SetHTTPSPort(httpsPort)
 
 			var apiDocEnabled bool
 			err = public.OptionsMgrInstance.GetOption(ctx, "API_DOC_ENABLED", &apiDocEnabled)
