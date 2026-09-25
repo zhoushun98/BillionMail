@@ -4,10 +4,8 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
-	"github.com/gogf/gf/os/gtimer"
 	"os"
 	"path/filepath"
-	"time"
 
 	"billionmail-core/api/settings/v1"
 	"billionmail-core/internal/consts"
@@ -85,13 +83,8 @@ func (c *ControllerV1) SetSSLConfig(ctx context.Context, req *v1.SetSSLConfigReq
 		res.SetError(gerror.New(public.LangCtx(ctx, "Failed to save private key file: {}", err)))
 		return res, nil
 	}
-	// Restart the container
-	gtimer.AddOnce(500*time.Millisecond, func() {
-		err = public.DockerApiFromCtx(ctx).RestartContainerByName(context.Background(), consts.SERVICES.Core)
-		if err != nil {
-			return
-		}
-	})
+	// 写完文件即生效，无需重启 core（见 cmd.reloadingCertStore）。
+	// 原先这里 500ms 后重启 core，前端紧接着拉取配置的请求会撞上重启而一直转圈。
 
 	_ = public.WriteLog(ctx, public.LogParams{
 		Type: consts.LOGTYPE.Settings,

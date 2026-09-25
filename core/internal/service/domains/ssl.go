@@ -6,7 +6,6 @@ import (
 	"billionmail-core/internal/model"
 	"billionmail-core/internal/model/entity"
 	"billionmail-core/internal/service/acme"
-	docker "billionmail-core/internal/service/dockerapi"
 	"billionmail-core/internal/service/mail_service"
 	"billionmail-core/internal/service/public"
 	"billionmail-core/internal/service/rbac"
@@ -175,22 +174,8 @@ func ApplyCertToService(domain, crtPem, keyPem string) (err error) {
 			return err
 		}
 
-		// Reload server ssl
-		go func() {
-			time.Sleep(time.Millisecond * 500)
-
-			var dk *docker.DockerAPI
-			dk, err = docker.NewDockerAPI()
-
-			if err != nil {
-				g.Log().Warning(context.Background(), "Get docker api instance failed")
-				return
-			}
-
-			defer dk.Close()
-
-			err = dk.RestartContainerByName(context.Background(), consts.SERVICES.Core)
-		}()
+		// core 的 HTTPS 会在下一次握手时读到新证书（见 cmd.reloadingCertStore），
+		// 不再重启 core：重启会打断紧接着的请求，也会截断 AutoRenewSSL 的续期循环。
 	} else {
 
 		csrPath := filepath.Join(consts.SSL_PATH, formattedDomain, "/fullchain.pem")
@@ -206,23 +191,7 @@ func ApplyCertToService(domain, crtPem, keyPem string) (err error) {
 		if err != nil {
 			return err
 		}
-		// Reload server ssl
-		go func() {
-			time.Sleep(time.Millisecond * 500)
-
-			var dk *docker.DockerAPI
-			dk, err = docker.NewDockerAPI()
-
-			if err != nil {
-				g.Log().Warning(context.Background(), "Get docker api instance failed")
-				return
-			}
-
-			defer dk.Close()
-
-			err = dk.RestartContainerByName(context.Background(), consts.SERVICES.Core)
-		}()
-
+		// 同上，写完文件即生效，无需重启 core
 	}
 
 	return
@@ -242,23 +211,7 @@ func ApplyCertToConsole(crtPem, keyPem string) (err error) {
 		return err
 	}
 
-	// Reload server ssl
-	go func() {
-		time.Sleep(time.Millisecond * 500)
-
-		var dk *docker.DockerAPI
-		dk, err = docker.NewDockerAPI()
-
-		if err != nil {
-			g.Log().Warning(context.Background(), "Get docker api instance failed")
-			return
-		}
-
-		defer dk.Close()
-
-		err = dk.RestartContainerByName(context.Background(), consts.SERVICES.Core)
-	}()
-
+	// 写完文件即生效，无需重启 core（见 cmd.reloadingCertStore）
 	return
 }
 

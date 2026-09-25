@@ -34,7 +34,6 @@ import (
 	"billionmail-core/internal/service/rspamd"
 	"billionmail-core/internal/service/timers"
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -483,52 +482,9 @@ var (
 			public.SelfSignedCert().Generate()
 
 			// Enable HTTPS
-			defaultCrtPair, _ := tls.LoadX509KeyPair(public.AbsPath(consts.SSL_PATH, "cert.pem"), public.AbsPath(consts.SSL_PATH, "key.pem"))
-			crtMap := make(map[string]*tls.Certificate)
-			crtMapMutex := sync.RWMutex{}
-			s.EnableHTTPS(public.AbsPath(consts.SSL_PATH, "cert.pem"), public.AbsPath(consts.SSL_PATH, "key.pem"), &tls.Config{
-				GetCertificate: func(info *tls.ClientHelloInfo) (*tls.Certificate, error) {
-					domain := info.ServerName
-
-					crtMapMutex.RLock()
-					if crtPair, ok := crtMap[domain]; ok {
-						crtMapMutex.RUnlock()
-						return crtPair, nil
-					}
-					crtMapMutex.RUnlock()
-
-					if exists, _ := g.DB().Model("domain").Where("a_record", public.FormatMX(domain)).Exist(); !exists {
-						return &defaultCrtPair, nil
-					}
-
-					g.Log().Debug(ctx, "Get TLS certificate for domain", domain)
-
-					crtMapMutex.Lock()
-					defer crtMapMutex.Unlock()
-
-					if crt, ok := crtMap[domain]; ok {
-						return crt, nil
-					}
-
-					crtPath := public.AbsPath(consts.SSL_PATH, public.FormatMX(domain), "fullchain.pem")
-					keyPath := public.AbsPath(consts.SSL_PATH, public.FormatMX(domain), "privkey.pem")
-
-					if !public.FileExists(crtPath) || !public.FileExists(keyPath) {
-						return &defaultCrtPair, nil
-					}
-
-					crtPair, err := tls.LoadX509KeyPair(crtPath, keyPath)
-
-					if err != nil {
-						g.Log().Warning(ctx, "Failed to load TLS certificate for domain", domain, err)
-						return &defaultCrtPair, nil
-					}
-
-					crtMap[domain] = &crtPair
-
-					return &crtPair, nil
-				},
-			})
+			// 证书文件被替换后下一次握手即生效，申请/续期/上传证书都不再需要重启 core
+			certStore := newReloadingCertStore(consoleCertFiles(), resolveDomainCertFiles)
+			s.EnableHTTPS(certStore.fallback.crt, certStore.fallback.key, certStore.tlsConfig())
 
 			// attempt add http port
 			if httpPort, err := public.DockerEnv("HTTP_PORT"); err == nil && httpPort != "" {
