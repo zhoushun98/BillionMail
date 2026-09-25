@@ -1,7 +1,10 @@
 import axios, { AxiosRequestConfig } from 'axios'
 import router from '@/router'
 import { useUserStore } from '@/store'
+import i18n from '@/i18n'
 import { apiUrlPrefix, isObject, Message } from '@/utils'
+
+const { t } = i18n.global
 
 interface FetchOptions {
 	prefix: string
@@ -141,6 +144,23 @@ instance.interceptors.response.use(
 		if (!axios.isCancel(error)) {
 			removeController(error.config || {})
 		}
+
+		// 没拿到响应的请求（core 重启、断网、超时）和被取消的请求都走这里，
+		// 不在这里关掉 loading，界面会一直卡在「请稍候」
+		const fetchOptions = error.config?.fetchOptions
+		if (fetchOptions?.loadFn) {
+			fetchOptions.loadFn()
+
+			// 只提示带 loading 的请求：它们是用户主动触发的操作，失败了不说，按钮就像点了没反应。
+			// 轮询、静默重试类请求不带 loading，不受影响；被新请求顶掉的重复请求也不提示。
+			// 兜底文案与登录页共用。
+			if (!axios.isCancel(error)) {
+				Message.error(error.response?.data?.msg || t('login.messages.networkError'), {
+					close: true,
+				})
+			}
+		}
+
 		return Promise.reject(error)
 	}
 )
